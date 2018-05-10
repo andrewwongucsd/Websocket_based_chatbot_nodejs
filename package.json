@@ -1,0 +1,17 @@
+{
+  "name": "GP_chatbot",
+  "version": "0.0.0",
+  "description": "A chatbot for General Practitioner in socket.io",
+  "main": "index.js",
+  "author": "Andrew Wong",
+  "private": true,
+  "license": "BSD",
+  "dependencies": {
+    "express": "4.13.4",
+    "micro": "latest",
+    "socket.io": "1.7.3"
+  },
+  "scripts": {
+    "start": "node index.js"
+  }
+}

@@ -1,0 +1,434 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>General practitioner ChatBot</title>
+  <style>
+    * {box-sizing: border-box;}
+    html {font-weight: 300;  -webkit-font-smoothing: antialiased;}
+    html, input {font-family: "HelveticaNeue-Light", "Helvetica Neue Light", "Helvetica Neue",Helvetica,  Arial,"Lucida Grande",sans-serif;}
+    html, body {  height: 100%;margin: 0;padding: 0;}
+    ul {list-style: none;word-wrap: break-word;}
+    #pages {height: 100%;margin: 0;padding: 0;width: 100%;}
+    .page {height: 100%;position: absolute;width: 100%;}
+    #login.page {background-color: #a50404;}
+    #login.page .form {height: 100px; margin-top: -100px;position: absolute; text-align: center;top: 50%;width: 100%;}
+    #login.page .form #usernameInput {
+      background-color: transparent;border: none;border-bottom: 2px solid #fff;
+      outline: none;padding-bottom: 15px;text-align: center;width: 400px;}
+    #login.page .title {font-size: 200%;}
+    #login.page #usernameInput {font-size: 200%;letter-spacing: 3px;}
+    #login.page .title, #login.page #usernameInput {  color: #fff;  font-weight: 100;}
+    #chat.page {display: none;}
+    #messages {font-size: 150%;}
+    #inputMessage {font-size: 100%;}
+    .log {
+      color: gray;
+      font-size: 70%;
+      margin: 5px;
+      text-align: center;
+    }
+    #chatArea {height: 100%;padding-bottom: 60px;}
+    #messages {height: 100%;margin: 0;overflow-y: scroll;padding: 10px 20px 10px 20px;}
+    .messageBody {color: gray;}
+    .username {font-weight: 700;overflow: hidden;padding-right: 15px;text-align: right;}
+    #inputMessage {border: 10px solid #000;bottom: 0;height: 60px;left: 0;outline: none;padding-left: 10px;position: absolute;right: 0;width: 100%;}
+    #usertype_prompt{display: none;}
+    h2 .title{text-align: center;}
+    #doctor_status{text-align: center;}
+    .doctor{border: 2px solid aquamarine; border-radius: 25px; padding: 10px 10px 10px 50px; background-image: url("https://image.flaticon.com/icons/svg/194/194915.svg"); background-repeat: no-repeat;}
+    .patient{}
+    .others{float: right;}
+  </style>
+</head>
+<body>
+  <ul id="pages">
+    <li id="chat" class="page">
+      <div id="chatArea">
+        <ul id="messages"></ul>
+      </div>
+      <input id="inputMessage" placeholder="Type here..."/>
+    </li>
+    <li id="login" class="page">
+      <h2 id="doctor_status" class="title">There is <span id="numDr"></span> doctor(s) in the chatroom.</h2>
+      <form id="username_prompt" class="form">
+        <h3 class="title">What's your name?</h3>
+        <input id="usernameInput" type="text" maxlength="14" /><br>
+      </form>
+      <form id="usertype_prompt" class="form">
+        <h3 class="title">Are you a patient?</h3>
+        <select id="usertypeInput"><option value="nv"> - </option><option value="patient">Yes</option><option value="doctor">No</option></select>
+      </form>
+    </li>
+  </ul>
+
+  <script src="https://code.jquery.com/jquery-1.10.2.min.js"></script>
+  <script src="/socket.io/socket.io.js"></script>
+  <!-- <script src="/main.js"></script> -->
+  <script>
+    $(function() {
+      var FADE_TIME = 150; // ms
+      var COLORS = [
+        '#e21400', '#91580f', '#f8a700', '#f78b00',
+        '#58dc00', '#287b00', '#a8f07a', '#4ae8c4',
+        '#3b88eb', '#3824aa', '#a700ff', '#d300e7'
+      ];
+      var $window = $(window);
+      var $usernameInput = $('#usernameInput'); // Input for username
+      var $usertypeInput = $('#usertypeInput');
+      var $counterpart = $('#counterpart');
+      var $numDr = $('#numDr');
+      var $messages = $('#messages'); // Messages area
+      var $inputMessage = $('#inputMessage'); // Input message input box
+
+      var $loginPage = $('#login'); // The login page
+      var $usertype_prompt = $('#usertype_prompt');
+      var $username_prompt = $('#username_prompt');
+      var $chatPage = $('#chat'); // The chatroom page
+
+      // Prompt for setting a username
+      var username;
+      var usertype;
+      var connected = false;
+      var $currentInput = $usernameInput.focus();
+
+      var socket = io();
+
+      function addParticipantsMessage (data) {
+        var message = '';
+        if (data.numUsers === 1) {
+          if (data.numDr === 1){
+            message += "Here's Dr."+data.username+" in the chatroom.";
+          }else if(data.numPa == 1){
+            message += "Hers's 1 patient";
+          }
+        } else {
+          message += "Here are " + data.numDr.toString() + " doctors and " + data.numPa.toString() +" patients";
+        }
+        log(message);
+      }
+
+      function setUsertype () {
+        usertype = $usertypeInput.val();
+        if(usertype == "nv" && usertype != "patient" && usertype != "doctor"){
+          usertype = undefined;
+          username = undefined;
+          $username_prompt.show();
+          $usertype_prompt.hide();
+        }else{
+          $usertype_prompt.hide();
+          $loginPage.fadeOut();
+          $chatPage.show();
+          $loginPage.off('click');
+          $currentInput = $inputMessage.focus();
+
+          // Tell the server your username
+          socket.emit('add user', {username: username, usertype: usertype});
+        }
+
+      }
+
+      // Sets the client's username
+      function setUsername () {
+        username = cleanInput($usernameInput.val().trim());
+
+        // If the username is valid
+        if (username) {
+          $username_prompt.hide();
+          $usertype_prompt.show();
+        }
+      }
+
+      // Sends a chat message
+      function sendMessage () {
+        var message = $inputMessage.val();
+        // Prevent markup from being injected into the message
+        message = cleanInput(message);
+        // if there is a non-empty message and a socket connection
+        if (message && connected) {
+          $inputMessage.val('');
+          addChatMessage({
+            username: username,
+            usertype: usertype,
+            message: message
+          });
+          // tell server to execute 'new message' and send along one parameter
+          socket.emit('new message', message);
+        }
+      }
+
+      // Log a message
+      function log (message, options) {
+        var $el = $('<li>').addClass('log').text(message);
+        addMessageElement($el, options);
+      }
+
+      function addChatMessage (data, options) {
+        options = options || {};
+        var $breakDiv = $('<br style="clear: both;">');
+
+        var $usernameDiv = $('<span class="username"/>')
+          .text(data.username)
+          .css('color', getUsernameColor(data.username));
+        var $messageBodyDiv = $('<span class="messageBody">')
+          .text(data.message);
+        if(data.username != username && data.usertype != usertype){
+          var $usertypeDiv = $('<span class="'+data.usertype+' others"/>')
+            .append($usernameDiv, $messageBodyDiv, $breakDiv);
+
+          var $messageDiv = $('<li class="message"/>')
+            .data('username', data.username)
+            .append($usertypeDiv, $breakDiv);
+        }else{
+          if(data.usertype == 'doctor'){
+            var $usertypeDiv = $('<span class="'+data.usertype+'"/>')
+              .append($usernameDiv, $messageBodyDiv, $breakDiv, " ");
+            var $messageDiv = $('<li class="message"/>')
+              .data('username', data.username)
+              .append($usertypeDiv);
+          }else{
+            var $usertypeDiv = $('<span class="'+data.usertype+'"/>')
+              .append($usernameDiv, $messageBodyDiv);
+            var $messageDiv = $('<li class="message"/>')
+              .data('username', data.username)
+              .append($usertypeDiv);
+          }
+
+        }
+
+        addMessageElement($messageDiv, options);
+      }
+
+      function addMessageElement (el, options) {
+        var $el = $(el);
+
+        // Setup default options
+        if (!options) {
+          options = {};
+        }
+        if (typeof options.fade === 'undefined') {
+          options.fade = true;
+        }
+        if (typeof options.prepend === 'undefined') {
+          options.prepend = false;
+        }
+
+        // Apply options
+        if (options.fade) {
+          $el.hide().fadeIn(FADE_TIME);
+        }
+        if (options.prepend) {
+          $messages.prepend($el);
+        } else {
+          $messages.append($el);
+        }
+        $messages[0].scrollTop = $messages[0].scrollHeight;
+      }
+
+      // Prevents input from having injected markup
+      function cleanInput (input) {
+        return $('<div/>').text(input).html();
+      }
+
+      // Gets the color of a username through our hash function
+      function getUsernameColor (username) {
+        // Compute hash code
+        var hash = 7;
+        for (var i = 0; i < username.length; i++) {
+           hash = username.charCodeAt(i) + (hash << 5) - hash;
+        }
+        // Calculate color
+        var index = Math.abs(hash % COLORS.length);
+        return COLORS[index];
+      }
+
+      // Response to chat from patients
+      function responseToPatient (data){
+        // {
+        //   username: socket.username,
+        //   usertype: socket.usertype,
+        //   message: data
+        // }
+        console.log("in responseToPatient");
+        console.log(data);
+        if(usertype == 'doctor'){
+          socket.emit('for doctors', {
+            action: 'ask doctors',
+            username_from: username,
+            usertype_from: usertype,
+            username_to: data.username,
+            usertype_to: data.usertype,
+            message: data.message
+          });
+        }
+
+      }
+
+      // Keyboard events
+
+      $window.keydown(function (event) {
+        // Auto-focus the current input when a key is typed
+        if (!(event.ctrlKey || event.metaKey || event.altKey)) {
+          $currentInput.focus();
+        }
+        // When the client hits ENTER on their keyboard
+        if (event.which === 13) {
+          if (username && usertype) {
+            sendMessage();
+          } else if(username){
+            setUsertype();
+          } else {
+            setUsername();
+          }
+        }
+      });
+
+      // Click events
+
+      // Focus input when clicking anywhere on login page
+      $loginPage.click(function () {
+        $currentInput.focus();
+      });
+
+      // Focus input when clicking on the message input's border
+      $inputMessage.click(function () {
+        $inputMessage.focus();
+      });
+
+      // Socket events
+
+      // Whenever the server emits 'login', log the login message
+      socket.on('login', function (data) {
+        connected = true;
+        // Display the welcome message
+        var message = "Welcome to the chatbot for General Practitioner in socket.io";
+        log(message, {
+          prepend: true
+        });
+        addParticipantsMessage(data);
+
+        // n
+        // if(usertype == "patient"){
+        //   addChatMessage({
+        //     username: "Doctors",
+        //     usertype: "doctor",
+        //     message: "Hi, "+username+". I am here to help you."
+        //   });
+        // }
+      });
+
+      // Whenever the server emits 'new message', update the chat body
+      socket.on('new message', function (data) {
+        console.log(data);
+        // {
+        //   username: socket.username,
+        //   usertype: socket.usertype,
+        //   message: data
+        // }
+        addChatMessage(data);
+        responseToPatient(data);
+      });
+
+      // Whenever the server emits 'user joined', log it in the chat body
+      socket.on('user joined', function (data) {
+        console.log('user joined '+data);
+        if(username && usertype && connected){
+          log(data.username +' ('+data.usertype+') joined');
+          addParticipantsMessage(data);
+        }else{
+          if(data.numDr == 0){
+            $numDr.text("no");
+          }else{
+            $numDr.text(data.numDr.toString());
+          }
+        }
+      });
+
+      socket.on('for patient', function (data){
+        console.log('for patient f/e');
+        console.log(data);
+        if(usertype == "patient"){
+          if(data.action == 'add user' && data.username_to == username){
+            // action: "add user",
+            // username_to: data.username_from,
+            // usertype_to: data.usertype_from,
+            // username_from: data.username_from,
+            // usertype_from: data.usertype_from,
+            // message: "Hi "+username+", I am here to help you."
+
+            addChatMessage({
+              username: data.username_from,
+              usertype: data.usertype_from,
+              message: "Hi "+username+", I am here to help you."
+            })
+          }
+        }
+        if(data.action == 'ask doctors'){
+          console.log("ask doctors in for patient");
+          addChatMessage({
+            username: data.username_from,
+            usertype: data.usertype_from,
+            message: data.message
+          })
+        }
+      })
+
+      socket.on('for doctors', function (data){
+        console.log('for doctors f/e');
+        console.log(data);
+
+        if(usertype == "doctor"){
+          if(data.action == 'add user'){
+            socket.emit('for patient',{
+              action: 'add user',
+              username_to: data.username,
+              usertype_to: data.usertype,
+              username_from: username,
+              usertype_from: usertype,
+              message: "Hi "+data.username+", I am here to help you."
+            });
+            console.log('after for patient emit in for doctors');
+            addChatMessage({
+              username: username,
+              usertype: usertype,
+              message: "Hi "+data.username+", I am here to help you."
+            })
+          }
+        }
+      });
+
+      // Whenever the server emits 'user left', log it in the chat body
+      socket.on('user left', function (data) {
+        log(data.username +' ('+data.usertype+') left');
+        addParticipantsMessage(data);
+      });
+
+
+
+      socket.on('disconnect', function () {
+        log('you have been disconnected');
+      });
+
+      socket.on('reconnect', function () {
+        log('you have been reconnected');
+        if (username && usertype) {
+          console.log('reconnect');
+          socket.emit('add user', {username: username, usertype: usertype});
+        }
+      });
+
+      socket.on('reconnect_error', function () {
+        log('attempt to reconnect has failed');
+      });
+
+      socket.on('peek', function(data){
+        if(data.numDr == 0){
+          $numDr.text("no");
+        }else{
+          $numDr.text(data.numDr.toString());
+        }
+      });
+    });
+  </script>
+</body>
+</html>
